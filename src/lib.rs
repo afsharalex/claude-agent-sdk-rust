@@ -110,6 +110,7 @@ pub use types::{
     // Messages
     AssistantMessage,
     AssistantMessageError,
+    CanUseToolFn,
     ClaudeAgentOptions,
     ClaudeAgentOptionsBuilder,
     // Content
@@ -117,6 +118,7 @@ pub use types::{
     // Control
     ControlResponseVariant,
     // Hooks
+    HookCallbackFn,
     HookContext,
     HookEvent,
     HookInput,
@@ -153,6 +155,7 @@ pub use types::{
     SdkBeta,
     SdkPluginConfig,
     SettingSource,
+    StderrCallbackFn,
     StreamEvent,
     SystemMessage,
     SystemPrompt,

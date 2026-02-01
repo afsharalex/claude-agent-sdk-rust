@@ -5,8 +5,6 @@
 use futures::Stream;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -14,34 +12,12 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use crate::error::{ClaudeSDKError, Result};
 use crate::transport::Transport;
 use crate::types::{
-    ControlResponseVariant, HookContext, HookEvent, HookInput, HookJSONOutput, HookMatcher,
-    Message, PermissionResult, SDKControlRequest, SDKControlRequestVariant, SDKControlResponse,
-    ToolPermissionContext,
+    CanUseToolFn, ControlResponseVariant, HookCallbackFn, HookContext, HookEvent, HookInput,
+    HookMatcher, Message, PermissionResult, SDKControlRequest, SDKControlRequestVariant,
+    SDKControlResponse, ToolPermissionContext,
 };
 
 use super::message_parser::parse_message;
-
-/// Type alias for the tool permission callback function.
-pub type CanUseToolFn = Arc<
-    dyn Fn(
-            String,
-            Value,
-            ToolPermissionContext,
-        ) -> Pin<Box<dyn Future<Output = PermissionResult> + Send>>
-        + Send
-        + Sync,
->;
-
-/// Type alias for hook callback function.
-pub type HookCallbackFn = Arc<
-    dyn Fn(
-            HookInput,
-            Option<String>,
-            HookContext,
-        ) -> Pin<Box<dyn Future<Output = HookJSONOutput> + Send>>
-        + Send
-        + Sync,
->;
 
 /// Query handler that manages bidirectional control protocol on top of Transport.
 pub struct QueryHandler {
@@ -59,6 +35,9 @@ pub struct QueryHandler {
     // Message channel
     message_tx: Option<mpsc::Sender<Result<Message>>>,
     message_rx: Option<mpsc::Receiver<Result<Message>>>,
+
+    // Outgoing response queue for control responses
+    outgoing_responses: Arc<Mutex<Vec<String>>>,
 
     // State
     initialized: bool,
@@ -88,6 +67,7 @@ impl QueryHandler {
             next_callback_id: AtomicU64::new(0),
             message_tx: Some(message_tx),
             message_rx: Some(message_rx),
+            outgoing_responses: Arc::new(Mutex::new(Vec::new())),
             initialized: false,
             initialization_result: None,
             initialize_timeout_secs,
@@ -374,18 +354,42 @@ impl QueryHandler {
         self.transport.end_input().await
     }
 
+    /// Flush any pending outgoing responses.
+    ///
+    /// This should be called periodically to send queued control responses
+    /// back to the CLI.
+    pub async fn flush_responses(&mut self) -> Result<()> {
+        let responses: Vec<String> = {
+            let mut guard = self.outgoing_responses.lock().await;
+            std::mem::take(&mut *guard)
+        };
+
+        for response in responses {
+            self.transport.write(&response).await?;
+        }
+
+        Ok(())
+    }
+
     /// Receive messages from the transport.
     ///
-    /// Note: This simplified version does not handle bidirectional control requests
-    /// within the stream. For full bidirectional support, use a channel-based approach.
+    /// This method handles bidirectional control protocol:
+    /// - Routes incoming control_response messages to pending requests
+    /// - Handles incoming control_request messages by invoking callbacks and queuing responses
+    /// - Yields regular SDK messages to the caller
+    ///
+    /// Note: Control responses are queued and must be flushed with `flush_responses()`.
     pub fn receive_messages(&mut self) -> impl Stream<Item = Result<Message>> + '_ {
         let pending_responses = self.pending_responses.clone();
+        let can_use_tool = self.can_use_tool.clone();
+        let hook_callbacks = self.hook_callbacks.clone();
+        let outgoing_responses = self.outgoing_responses.clone();
 
         async_stream::try_stream! {
             let mut stream = self.transport.read_messages();
 
             while let Some(result) = futures::StreamExt::next(&mut stream).await {
-                let data = result?;
+                let data: Value = result?;
 
                 let msg_type = data.get("type").and_then(|v| v.as_str());
 
@@ -411,9 +415,35 @@ impl QueryHandler {
                         continue;
                     }
 
-                    Some("control_request") | Some("control_cancel_request") => {
-                        // Skip control requests in simplified mode
-                        // Full bidirectional support requires channel-based architecture
+                    Some("control_request") => {
+                        // Handle incoming control request from CLI
+                        if let Ok(request) = serde_json::from_value::<SDKControlRequest>(data.clone()) {
+                            let request_id = request.request_id.clone();
+
+                            // Process the control request
+                            let response_result = handle_control_request_static(
+                                &request.request,
+                                &can_use_tool,
+                                &hook_callbacks,
+                            ).await;
+
+                            // Build the control response
+                            let control_response = match response_result {
+                                Ok(response_data) => SDKControlResponse::success(&request_id, Some(response_data)),
+                                Err(e) => SDKControlResponse::error(&request_id, e.to_string()),
+                            };
+
+                            // Queue response to be sent (will be flushed later)
+                            if let Ok(response_json) = serde_json::to_string(&control_response) {
+                                outgoing_responses.lock().await.push(format!("{}\n", response_json));
+                            }
+                        }
+                        continue;
+                    }
+
+                    Some("control_cancel_request") => {
+                        // Handle control cancel request - currently just acknowledge
+                        // TODO: Implement proper cancellation support if needed
                         continue;
                     }
 
@@ -545,6 +575,70 @@ fn rand_hex() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::Transport;
+    use async_trait::async_trait;
+    use serde_json::json;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Mock transport for testing QueryHandler.
+    struct MockTransport {
+        messages: Arc<Mutex<Vec<Value>>>,
+        written: Arc<Mutex<Vec<String>>>,
+        connected: Arc<AtomicBool>,
+    }
+
+    impl MockTransport {
+        fn new(messages: Vec<Value>) -> Self {
+            Self {
+                messages: Arc::new(Mutex::new(messages)),
+                written: Arc::new(Mutex::new(vec![])),
+                connected: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        fn empty() -> Self {
+            Self::new(vec![])
+        }
+    }
+
+    #[async_trait]
+    impl Transport for MockTransport {
+        async fn connect(&mut self) -> Result<()> {
+            self.connected.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn write(&mut self, data: &str) -> Result<()> {
+            self.written.lock().await.push(data.to_string());
+            Ok(())
+        }
+
+        fn read_messages(
+            &mut self,
+        ) -> Pin<Box<dyn futures::Stream<Item = Result<Value>> + Send + '_>> {
+            let messages = self.messages.clone();
+            Box::pin(async_stream::try_stream! {
+                let mut guard = messages.lock().await;
+                for msg in std::mem::take(&mut *guard) {
+                    yield msg;
+                }
+            })
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            self.connected.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn is_ready(&self) -> bool {
+            self.connected.load(Ordering::SeqCst)
+        }
+
+        async fn end_input(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_rand_hex() {
@@ -553,5 +647,253 @@ mod tests {
         // Should be non-empty
         assert!(!hex1.is_empty());
         // Might be different (depends on timing)
+    }
+
+    #[test]
+    fn test_rand_hex_is_valid_hex() {
+        let hex = rand_hex();
+        // Should only contain hex characters
+        for c in hex.chars() {
+            assert!(c.is_ascii_hexdigit());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_creation() {
+        let transport = Box::new(MockTransport::empty());
+        let handler = QueryHandler::new(
+            transport,
+            true, // streaming mode
+            None, // no can_use_tool
+            HashMap::new(),
+            60, // timeout
+        );
+
+        assert!(handler.initialization_result().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_write() {
+        let mock = MockTransport::empty();
+        let written = mock.written.clone();
+        let transport = Box::new(mock);
+
+        let mut handler = QueryHandler::new(transport, false, None, HashMap::new(), 60);
+
+        handler.write("test message\n").await.unwrap();
+
+        let written_messages = written.lock().await;
+        assert_eq!(written_messages.len(), 1);
+        assert_eq!(written_messages[0], "test message\n");
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_end_input() {
+        let transport = Box::new(MockTransport::empty());
+        let mut handler = QueryHandler::new(transport, false, None, HashMap::new(), 60);
+
+        let result = handler.end_input().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_close() {
+        let mock = MockTransport::empty();
+        let connected = mock.connected.clone();
+        connected.store(true, Ordering::SeqCst);
+        let transport = Box::new(mock);
+
+        let mut handler = QueryHandler::new(transport, false, None, HashMap::new(), 60);
+
+        handler.close().await.unwrap();
+        assert!(!connected.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_flush_responses_empty() {
+        let transport = Box::new(MockTransport::empty());
+        let mut handler = QueryHandler::new(transport, false, None, HashMap::new(), 60);
+
+        // Flushing empty queue should succeed
+        let result = handler.flush_responses().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_receive_messages_assistant() {
+        let messages = vec![json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello"}],
+                "model": "claude-3-5-sonnet",
+                "stop_reason": "end_turn"
+            }
+        })];
+
+        let transport = Box::new(MockTransport::new(messages));
+        let mut handler = QueryHandler::new(transport, true, None, HashMap::new(), 60);
+
+        let stream = handler.receive_messages();
+        tokio::pin!(stream);
+
+        let mut received = Vec::new();
+        while let Some(result) = futures::StreamExt::next(&mut stream).await {
+            received.push(result.unwrap());
+        }
+
+        assert_eq!(received.len(), 1);
+        assert!(received[0].is_assistant());
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_receive_control_response() {
+        // Test that control responses are properly routed
+        let messages = vec![
+            json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": "test-req-1",
+                    "response": {"status": "ok"}
+                }
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hello"}],
+                    "model": "claude-3-5-sonnet",
+                    "stop_reason": "end_turn"
+                }
+            }),
+        ];
+
+        let transport = Box::new(MockTransport::new(messages));
+        let mut handler = QueryHandler::new(transport, true, None, HashMap::new(), 60);
+
+        let stream = handler.receive_messages();
+        tokio::pin!(stream);
+
+        let mut received = Vec::new();
+        while let Some(result) = futures::StreamExt::next(&mut stream).await {
+            received.push(result.unwrap());
+        }
+
+        // Only the assistant message should be yielded, not the control response
+        assert_eq!(received.len(), 1);
+        assert!(received[0].is_assistant());
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_receive_multiple_message_types() {
+        let messages = vec![
+            json!({
+                "type": "system",
+                "subtype": "init",
+                "cwd": "/test",
+                "session_id": "session-1"
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "Hello"
+                }
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hi there!"}],
+                    "model": "claude-3-5-sonnet",
+                    "stop_reason": "end_turn"
+                }
+            }),
+            json!({
+                "type": "result",
+                "result": "success",
+                "session_id": "session-1",
+                "cost_usd": 0.01,
+                "duration_ms": 1000
+            }),
+        ];
+
+        let transport = Box::new(MockTransport::new(messages));
+        let mut handler = QueryHandler::new(transport, true, None, HashMap::new(), 60);
+
+        let stream = handler.receive_messages();
+        tokio::pin!(stream);
+
+        let received: Vec<_> = futures::StreamExt::collect(stream).await;
+        assert_eq!(received.len(), 4);
+
+        // Check message types
+        assert!(received[0].as_ref().unwrap().is_system());
+        assert!(received[1].as_ref().unwrap().is_user());
+        assert!(received[2].as_ref().unwrap().is_assistant());
+        assert!(received[3].as_ref().unwrap().is_result());
+    }
+
+    #[tokio::test]
+    async fn test_handle_control_request_static_no_can_use_tool() {
+        let request = SDKControlRequestVariant::CanUseTool {
+            tool_name: "Bash".to_string(),
+            input: json!({"command": "ls"}),
+            permission_suggestions: None,
+            blocked_path: None,
+        };
+
+        let result =
+            handle_control_request_static(&request, &None, &Arc::new(Mutex::new(HashMap::new())))
+                .await;
+
+        // Should fail because no callback is provided
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_control_request_static_mcp_not_found() {
+        let request = SDKControlRequestVariant::McpMessage {
+            server_name: "unknown-server".to_string(),
+            message: json!({"jsonrpc": "2.0", "method": "tools/list", "id": 1}),
+        };
+
+        let result =
+            handle_control_request_static(&request, &None, &Arc::new(Mutex::new(HashMap::new())))
+                .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+
+        // Should return an error response for unknown server
+        assert!(response.get("error").is_some());
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_control_request_static_hook_callback_not_found() {
+        let request = SDKControlRequestVariant::HookCallback {
+            callback_id: "unknown-callback".to_string(),
+            input: json!({}),
+            tool_use_id: None,
+        };
+
+        let result =
+            handle_control_request_static(&request, &None, &Arc::new(Mutex::new(HashMap::new())))
+                .await;
+
+        // Should fail because callback is not registered
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No hook callback found"));
     }
 }

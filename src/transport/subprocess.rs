@@ -975,4 +975,447 @@ mod tests {
 
         assert_eq!(transport.max_buffer_size, 1024 * 1024);
     }
+
+    #[test]
+    fn test_build_command_with_betas() {
+        let options = ClaudeAgentOptions::builder()
+            .betas(vec![SdkBeta::Context1m20250807])
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--betas".to_string()));
+        assert!(cmd.contains(&"context-1m-2025-08-07".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_include_partial_messages() {
+        let options = ClaudeAgentOptions::builder()
+            .include_partial_messages(true)
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--include-partial-messages".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_fork_session() {
+        let options = ClaudeAgentOptions::builder().fork_session(true).build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--fork-session".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_permission_prompt_tool_name() {
+        let options = ClaudeAgentOptions::builder()
+            .permission_prompt_tool_name("MyTool")
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--permission-prompt-tool".to_string()));
+        assert!(cmd.contains(&"MyTool".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_extra_args() {
+        let mut extra_args = std::collections::HashMap::new();
+        extra_args.insert("custom-flag".to_string(), Some("value".to_string()));
+        extra_args.insert("boolean-flag".to_string(), None);
+
+        let options = ClaudeAgentOptions::builder().extra_args(extra_args).build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--custom-flag".to_string()));
+        assert!(cmd.contains(&"value".to_string()));
+        assert!(cmd.contains(&"--boolean-flag".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_empty_tools() {
+        let options = ClaudeAgentOptions::builder()
+            .tools(vec![]) // Empty tools list
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        // Empty tools should still include --tools flag with empty string
+        let tools_idx = cmd.iter().position(|s| s == "--tools");
+        assert!(tools_idx.is_some());
+        if let Some(idx) = tools_idx {
+            assert_eq!(cmd[idx + 1], "");
+        }
+    }
+
+    #[test]
+    fn test_build_command_with_mcp_servers_path() {
+        let options = ClaudeAgentOptions::builder()
+            .mcp_servers(PathBuf::from("/path/to/mcp-config.json"))
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--mcp-config".to_string()));
+        assert!(cmd.contains(&"/path/to/mcp-config.json".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_add_dirs() {
+        let options = ClaudeAgentOptions::builder()
+            .add_dirs(vec![
+                PathBuf::from("/extra/dir1"),
+                PathBuf::from("/extra/dir2"),
+            ])
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        // Should contain --add-dir for each directory
+        let add_dir_count = cmd.iter().filter(|s| *s == "--add-dir").count();
+        assert_eq!(add_dir_count, 2);
+        assert!(cmd.contains(&"/extra/dir1".to_string()));
+        assert!(cmd.contains(&"/extra/dir2".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_setting_sources() {
+        let options = ClaudeAgentOptions::builder()
+            .setting_sources(vec![SettingSource::User, SettingSource::Project])
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--setting-sources".to_string()));
+        assert!(cmd.contains(&"user,project".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_user() {
+        let options = ClaudeAgentOptions::builder().user("test-user-123").build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        // User isn't directly added to command line in this implementation
+        // but we can verify it's stored in options
+        assert!(transport.options.user.is_some());
+    }
+
+    #[test]
+    fn test_build_command_with_agents() {
+        use crate::types::AgentDefinition;
+        use std::collections::HashMap;
+
+        let mut agents = HashMap::new();
+        agents.insert(
+            "test-agent".to_string(),
+            AgentDefinition::new("Test agent", "Test prompt")
+                .with_tools(vec!["Read".to_string()])
+                .with_model("claude-3-5-sonnet"),
+        );
+
+        let options = ClaudeAgentOptions::builder().agents(agents).build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--agents".to_string()));
+        // The agents should be serialized to JSON
+        let agents_idx = cmd.iter().position(|s| s == "--agents").unwrap();
+        let agents_json = &cmd[agents_idx + 1];
+        assert!(agents_json.contains("test-agent"));
+        assert!(agents_json.contains("Test prompt"));
+    }
+
+    #[test]
+    fn test_build_command_with_plugins() {
+        use crate::types::SdkPluginConfig;
+
+        let options = ClaudeAgentOptions::builder()
+            .plugins(vec![
+                SdkPluginConfig::local("/path/to/plugin1"),
+                SdkPluginConfig::local("/path/to/plugin2"),
+            ])
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        // Should contain --plugin-dir for each local plugin
+        let plugin_dir_count = cmd.iter().filter(|s| *s == "--plugin-dir").count();
+        assert_eq!(plugin_dir_count, 2);
+        assert!(cmd.contains(&"/path/to/plugin1".to_string()));
+        assert!(cmd.contains(&"/path/to/plugin2".to_string()));
+    }
+
+    #[test]
+    fn test_build_command_with_output_format_json_schema() {
+        let options = ClaudeAgentOptions::builder()
+            .output_format(serde_json::json!({
+                "type": "json_schema",
+                "schema": {"type": "object", "properties": {"name": {"type": "string"}}}
+            }))
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        assert!(cmd.contains(&"--json-schema".to_string()));
+    }
+
+    #[test]
+    fn test_default_max_buffer_size() {
+        let options = ClaudeAgentOptions::new();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        assert_eq!(transport.max_buffer_size, 1024 * 1024); // 1MB default
+    }
+
+    #[test]
+    fn test_build_command_no_prompt_non_streaming() {
+        let options = ClaudeAgentOptions::new();
+
+        let transport = SubprocessCLITransport {
+            prompt: None,
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        let cmd = transport.build_command();
+
+        // Non-streaming without prompt should not have --print or --input-format
+        assert!(!cmd.contains(&"--print".to_string()));
+        assert!(!cmd.contains(&"--input-format".to_string()));
+    }
+
+    #[test]
+    fn test_build_settings_value_none() {
+        let options = ClaudeAgentOptions::new();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        assert!(transport.build_settings_value().is_none());
+    }
+
+    #[test]
+    fn test_build_settings_value_with_settings_path() {
+        let options = ClaudeAgentOptions::builder()
+            .settings("/path/to/settings.json")
+            .build();
+
+        let transport = SubprocessCLITransport {
+            prompt: Some("test".to_string()),
+            options,
+            cli_path: PathBuf::from("/usr/bin/claude"),
+            cwd: None,
+            process: None,
+            stdin: None,
+            stdout: None,
+            ready: false,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+            is_streaming: false,
+        };
+
+        assert_eq!(
+            transport.build_settings_value(),
+            Some("/path/to/settings.json".to_string())
+        );
+    }
 }

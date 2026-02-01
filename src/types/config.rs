@@ -3,11 +3,35 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
+use super::hook::{HookEvent, HookMatcher};
 use super::mcp::McpServerConfig;
-use super::permission::PermissionMode;
+use super::permission::{PermissionMode, PermissionResult, ToolPermissionContext};
 use super::sandbox::SandboxSettings;
+
+/// Type alias for the tool permission callback function.
+///
+/// This callback is invoked when a tool requests permission to execute.
+/// The function receives the tool name, input, and context, and should
+/// return a permission result indicating whether to allow or deny.
+pub type CanUseToolFn = Arc<
+    dyn Fn(
+            String,
+            Value,
+            ToolPermissionContext,
+        ) -> Pin<Box<dyn Future<Output = PermissionResult> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Type alias for stderr callback function.
+///
+/// This callback is invoked when stderr output is received from the CLI process.
+pub type StderrCallbackFn = Arc<dyn Fn(String) + Send + Sync>;
 
 /// SDK Beta features.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,7 +211,6 @@ impl SdkPluginConfig {
 }
 
 /// Query options for Claude SDK.
-#[derive(Debug, Clone, Default)]
 pub struct ClaudeAgentOptions {
     /// Base set of tools (list or preset).
     pub tools: Option<Tools>,
@@ -206,6 +229,23 @@ pub struct ClaudeAgentOptions {
 
     /// Permission mode controlling tool execution.
     pub permission_mode: Option<PermissionMode>,
+
+    /// Callback for tool permission decisions.
+    ///
+    /// When set, this callback is invoked for each tool execution request
+    /// to determine whether the tool should be allowed or denied.
+    pub can_use_tool: Option<CanUseToolFn>,
+
+    /// Hook configurations for various SDK events.
+    ///
+    /// Maps hook events to their matchers and callbacks.
+    pub hooks: HashMap<HookEvent, Vec<HookMatcher>>,
+
+    /// Callback for stderr output from the CLI.
+    ///
+    /// When set, stderr output from the Claude CLI process will be
+    /// passed to this callback instead of being inherited.
+    pub stderr: Option<StderrCallbackFn>,
 
     /// Continue a previous conversation.
     pub continue_conversation: bool,
@@ -283,6 +323,133 @@ pub struct ClaudeAgentOptions {
     pub enable_file_checkpointing: bool,
 }
 
+impl std::fmt::Debug for ClaudeAgentOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeAgentOptions")
+            .field("tools", &self.tools)
+            .field("allowed_tools", &self.allowed_tools)
+            .field("disallowed_tools", &self.disallowed_tools)
+            .field("system_prompt", &self.system_prompt)
+            .field("mcp_servers", &self.mcp_servers)
+            .field("permission_mode", &self.permission_mode)
+            .field("can_use_tool", &self.can_use_tool.is_some())
+            .field("hooks", &self.hooks)
+            .field("stderr", &self.stderr.is_some())
+            .field("continue_conversation", &self.continue_conversation)
+            .field("resume", &self.resume)
+            .field("max_turns", &self.max_turns)
+            .field("max_budget_usd", &self.max_budget_usd)
+            .field("model", &self.model)
+            .field("fallback_model", &self.fallback_model)
+            .field("betas", &self.betas)
+            .field(
+                "permission_prompt_tool_name",
+                &self.permission_prompt_tool_name,
+            )
+            .field("cwd", &self.cwd)
+            .field("cli_path", &self.cli_path)
+            .field("settings", &self.settings)
+            .field("add_dirs", &self.add_dirs)
+            .field("env", &self.env)
+            .field("extra_args", &self.extra_args)
+            .field("max_buffer_size", &self.max_buffer_size)
+            .field("user", &self.user)
+            .field("include_partial_messages", &self.include_partial_messages)
+            .field("fork_session", &self.fork_session)
+            .field("agents", &self.agents)
+            .field("setting_sources", &self.setting_sources)
+            .field("sandbox", &self.sandbox)
+            .field("plugins", &self.plugins)
+            .field("max_thinking_tokens", &self.max_thinking_tokens)
+            .field("output_format", &self.output_format)
+            .field("enable_file_checkpointing", &self.enable_file_checkpointing)
+            .finish()
+    }
+}
+
+impl Clone for ClaudeAgentOptions {
+    fn clone(&self) -> Self {
+        Self {
+            tools: self.tools.clone(),
+            allowed_tools: self.allowed_tools.clone(),
+            disallowed_tools: self.disallowed_tools.clone(),
+            system_prompt: self.system_prompt.clone(),
+            mcp_servers: self.mcp_servers.clone(),
+            permission_mode: self.permission_mode,
+            can_use_tool: self.can_use_tool.clone(),
+            hooks: self.hooks.clone(),
+            stderr: self.stderr.clone(),
+            continue_conversation: self.continue_conversation,
+            resume: self.resume.clone(),
+            max_turns: self.max_turns,
+            max_budget_usd: self.max_budget_usd,
+            model: self.model.clone(),
+            fallback_model: self.fallback_model.clone(),
+            betas: self.betas.clone(),
+            permission_prompt_tool_name: self.permission_prompt_tool_name.clone(),
+            cwd: self.cwd.clone(),
+            cli_path: self.cli_path.clone(),
+            settings: self.settings.clone(),
+            add_dirs: self.add_dirs.clone(),
+            env: self.env.clone(),
+            extra_args: self.extra_args.clone(),
+            max_buffer_size: self.max_buffer_size,
+            user: self.user.clone(),
+            include_partial_messages: self.include_partial_messages,
+            fork_session: self.fork_session,
+            agents: self.agents.clone(),
+            setting_sources: self.setting_sources.clone(),
+            sandbox: self.sandbox.clone(),
+            plugins: self.plugins.clone(),
+            max_thinking_tokens: self.max_thinking_tokens,
+            output_format: self.output_format.clone(),
+            enable_file_checkpointing: self.enable_file_checkpointing,
+        }
+    }
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for ClaudeAgentOptions {
+    fn default() -> Self {
+        Self {
+            tools: None,
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            system_prompt: None,
+            mcp_servers: None,
+            permission_mode: None,
+            can_use_tool: None,
+            hooks: HashMap::new(),
+            stderr: None,
+            continue_conversation: false,
+            resume: None,
+            max_turns: None,
+            max_budget_usd: None,
+            model: None,
+            fallback_model: None,
+            betas: Vec::new(),
+            permission_prompt_tool_name: None,
+            cwd: None,
+            cli_path: None,
+            settings: None,
+            add_dirs: Vec::new(),
+            env: HashMap::new(),
+            extra_args: HashMap::new(),
+            max_buffer_size: None,
+            user: None,
+            include_partial_messages: false,
+            fork_session: false,
+            agents: None,
+            setting_sources: None,
+            sandbox: None,
+            plugins: Vec::new(),
+            max_thinking_tokens: None,
+            output_format: None,
+            enable_file_checkpointing: false,
+        }
+    }
+}
+
 impl ClaudeAgentOptions {
     /// Create a new builder for ClaudeAgentOptions.
     pub fn builder() -> ClaudeAgentOptionsBuilder {
@@ -296,9 +463,33 @@ impl ClaudeAgentOptions {
 }
 
 /// Builder for ClaudeAgentOptions.
-#[derive(Debug, Clone, Default)]
 pub struct ClaudeAgentOptionsBuilder {
     options: ClaudeAgentOptions,
+}
+
+impl std::fmt::Debug for ClaudeAgentOptionsBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeAgentOptionsBuilder")
+            .field("options", &self.options)
+            .finish()
+    }
+}
+
+impl Clone for ClaudeAgentOptionsBuilder {
+    fn clone(&self) -> Self {
+        Self {
+            options: self.options.clone(),
+        }
+    }
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for ClaudeAgentOptionsBuilder {
+    fn default() -> Self {
+        Self {
+            options: ClaudeAgentOptions::default(),
+        }
+    }
 }
 
 impl ClaudeAgentOptionsBuilder {
@@ -333,6 +524,42 @@ impl ClaudeAgentOptionsBuilder {
 
     pub fn permission_mode(mut self, mode: PermissionMode) -> Self {
         self.options.permission_mode = Some(mode);
+        self
+    }
+
+    /// Set the can_use_tool callback for tool permission decisions.
+    ///
+    /// This callback is invoked when a tool requests permission to execute.
+    /// The function receives the tool name, input, and context, and should
+    /// return a permission result indicating whether to allow or deny.
+    pub fn can_use_tool(mut self, callback: CanUseToolFn) -> Self {
+        self.options.can_use_tool = Some(callback);
+        self
+    }
+
+    /// Set hook configurations for SDK events.
+    ///
+    /// Maps hook events to their matchers and callbacks.
+    pub fn hooks(mut self, hooks: HashMap<HookEvent, Vec<HookMatcher>>) -> Self {
+        self.options.hooks = hooks;
+        self
+    }
+
+    /// Add a hook matcher for a specific event.
+    ///
+    /// This is a convenience method for adding individual hook matchers
+    /// without replacing the entire hooks map.
+    pub fn add_hook(mut self, event: HookEvent, matcher: HookMatcher) -> Self {
+        self.options.hooks.entry(event).or_default().push(matcher);
+        self
+    }
+
+    /// Set the stderr callback.
+    ///
+    /// When set, stderr output from the Claude CLI process will be
+    /// passed to this callback instead of being inherited.
+    pub fn stderr(mut self, callback: StderrCallbackFn) -> Self {
+        self.options.stderr = Some(callback);
         self
     }
 
