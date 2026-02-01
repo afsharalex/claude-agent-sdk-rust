@@ -413,4 +413,192 @@ mod tests {
         assert!(msg.as_user().is_some());
         assert!(msg.as_assistant().is_none());
     }
+
+    #[test]
+    fn test_message_as_system() {
+        let msg: Message = SystemMessage::new("init", HashMap::new()).into();
+        assert!(msg.as_system().is_some());
+        assert!(msg.as_user().is_none());
+    }
+
+    #[test]
+    fn test_message_as_result() {
+        let msg: Message = ResultMessage::new("success", 1000, 800, false, 3, "session-123").into();
+        assert!(msg.as_result().is_some());
+        assert!(msg.as_assistant().is_none());
+    }
+
+    #[test]
+    fn test_message_as_stream_event() {
+        let msg: Message = StreamEvent::new("uuid-1", "session-1", json!({})).into();
+        assert!(msg.as_stream_event().is_some());
+        assert!(msg.as_user().is_none());
+    }
+
+    #[test]
+    fn test_message_is_stream_event() {
+        let msg: Message = StreamEvent::new("uuid-1", "session-1", json!({})).into();
+        assert!(msg.is_stream_event());
+        assert!(!msg.is_user());
+        assert!(!msg.is_assistant());
+    }
+
+    #[test]
+    fn test_assistant_message_tool_uses() {
+        let msg = AssistantMessage::new(
+            vec![
+                ContentBlock::text("Running command"),
+                ContentBlock::tool_use("tool-1", "Bash", json!({"command": "ls"})),
+                ContentBlock::text("Done"),
+            ],
+            "claude-3-5-sonnet",
+        );
+        let tool_uses = msg.tool_uses();
+        assert_eq!(tool_uses.len(), 1);
+        assert!(tool_uses[0].is_tool_use());
+    }
+
+    #[test]
+    fn test_assistant_message_with_error() {
+        let msg = AssistantMessage::new(vec![], "claude-3-5-sonnet")
+            .with_error(AssistantMessageError::RateLimit);
+        assert_eq!(msg.error, Some(AssistantMessageError::RateLimit));
+    }
+
+    #[test]
+    fn test_assistant_message_with_parent_tool_use_id() {
+        let msg = AssistantMessage::new(vec![], "claude-3-5-sonnet")
+            .with_parent_tool_use_id("parent-123");
+        assert_eq!(msg.parent_tool_use_id, Some("parent-123".to_string()));
+    }
+
+    #[test]
+    fn test_system_message_new() {
+        let mut data = HashMap::new();
+        data.insert("cwd".to_string(), json!("/home/user"));
+        data.insert("session_id".to_string(), json!("session-123"));
+        let msg = SystemMessage::new("init", data);
+        assert_eq!(msg.subtype, "init");
+        assert_eq!(msg.data.len(), 2);
+    }
+
+    #[test]
+    fn test_result_message_with_usage() {
+        let usage = json!({
+            "input_tokens": 100,
+            "output_tokens": 50
+        });
+        let msg = ResultMessage::new("success", 1000, 800, false, 3, "session-123")
+            .with_usage(usage.clone());
+        assert_eq!(msg.usage, Some(usage));
+    }
+
+    #[test]
+    fn test_result_message_with_structured_output() {
+        let output = json!({"result": "success", "data": [1, 2, 3]});
+        let msg = ResultMessage::new("success", 1000, 800, false, 3, "session-123")
+            .with_structured_output(output.clone());
+        assert_eq!(msg.structured_output, Some(output));
+    }
+
+    #[test]
+    fn test_stream_event_with_parent_tool_use_id() {
+        let event =
+            StreamEvent::new("uuid-1", "session-1", json!({})).with_parent_tool_use_id("tool-123");
+        assert_eq!(event.parent_tool_use_id, Some("tool-123".to_string()));
+    }
+
+    #[test]
+    fn test_user_message_with_uuid() {
+        let msg = UserMessage::new("test").with_uuid("uuid-123");
+        assert_eq!(msg.uuid, Some("uuid-123".to_string()));
+    }
+
+    #[test]
+    fn test_user_message_with_parent_tool_use_id() {
+        let msg = UserMessage::new("test").with_parent_tool_use_id("tool-123");
+        assert_eq!(msg.parent_tool_use_id, Some("tool-123".to_string()));
+    }
+
+    #[test]
+    fn test_user_message_with_tool_use_result() {
+        let result = json!({"output": "success"});
+        let msg = UserMessage::new("test").with_tool_use_result(result.clone());
+        assert_eq!(msg.tool_use_result, Some(result));
+    }
+
+    #[test]
+    fn test_user_message_content_from_str() {
+        let content: UserMessageContent = "Hello".into();
+        match content {
+            UserMessageContent::Text(text) => assert_eq!(text, "Hello"),
+            _ => panic!("Expected text content"),
+        }
+    }
+
+    #[test]
+    fn test_user_message_content_from_string() {
+        let content: UserMessageContent = String::from("Hello").into();
+        match content {
+            UserMessageContent::Text(text) => assert_eq!(text, "Hello"),
+            _ => panic!("Expected text content"),
+        }
+    }
+
+    #[test]
+    fn test_user_message_content_from_blocks() {
+        let blocks = vec![ContentBlock::text("Hello"), ContentBlock::text("World")];
+        let content: UserMessageContent = blocks.into();
+        match content {
+            UserMessageContent::Blocks(b) => assert_eq!(b.len(), 2),
+            _ => panic!("Expected block content"),
+        }
+    }
+
+    #[test]
+    fn test_assistant_message_error_serde() {
+        let errors = [
+            (
+                AssistantMessageError::AuthenticationFailed,
+                "\"authentication_failed\"",
+            ),
+            (AssistantMessageError::BillingError, "\"billing_error\""),
+            (AssistantMessageError::RateLimit, "\"rate_limit\""),
+            (AssistantMessageError::InvalidRequest, "\"invalid_request\""),
+            (AssistantMessageError::ServerError, "\"server_error\""),
+            (AssistantMessageError::Unknown, "\"unknown\""),
+        ];
+
+        for (error, expected) in errors {
+            let json = serde_json::to_string(&error).unwrap();
+            assert_eq!(json, expected);
+        }
+    }
+
+    #[test]
+    fn test_message_from_conversions() {
+        let user: Message = UserMessage::new("test").into();
+        assert!(user.is_user());
+
+        let assistant: Message = AssistantMessage::new(vec![], "model").into();
+        assert!(assistant.is_assistant());
+
+        let system: Message = SystemMessage::new("init", HashMap::new()).into();
+        assert!(system.is_system());
+
+        let result: Message = ResultMessage::new("success", 1000, 800, false, 3, "session").into();
+        assert!(result.is_result());
+
+        let stream: Message = StreamEvent::new("uuid", "session", json!({})).into();
+        assert!(stream.is_stream_event());
+    }
+
+    #[test]
+    fn test_result_message_is_error() {
+        let success = ResultMessage::new("success", 1000, 800, false, 3, "session-123");
+        assert!(!success.is_error);
+
+        let error = ResultMessage::new("error", 1000, 800, true, 3, "session-123");
+        assert!(error.is_error);
+    }
 }

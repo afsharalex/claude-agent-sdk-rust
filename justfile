@@ -43,9 +43,9 @@ test-integration:
 test-all:
     cargo test -- --include-ignored
 
-# Generate code coverage report (requires cargo-tarpaulin)
+# Generate code coverage report (requires cargo-llvm-cov)
 coverage:
-    cargo tarpaulin --out Html --output-dir coverage
+    cargo llvm-cov --lib --html --output-dir coverage --ignore-filename-regex "examples/.*"
 
 # Generate documentation
 docs:

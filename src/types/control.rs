@@ -398,4 +398,226 @@ mod tests {
         let parsed: SDKControlResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, response);
     }
+
+    #[test]
+    fn test_sdk_control_request_new() {
+        let request = SDKControlRequest::new("req-1", SDKControlRequestVariant::Interrupt);
+        assert_eq!(request.request_type, "control_request");
+        assert_eq!(request.request_id, "req-1");
+    }
+
+    #[test]
+    fn test_sdk_control_request_set_model() {
+        let request = SDKControlRequest::set_model("req-1", Some("claude-3-5-sonnet".to_string()));
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"subtype\":\"set_model\""));
+        assert!(json.contains("\"model\":\"claude-3-5-sonnet\""));
+    }
+
+    #[test]
+    fn test_sdk_control_request_set_model_none() {
+        let request = SDKControlRequest::set_model("req-1", None);
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"subtype\":\"set_model\""));
+        // model should not be serialized when None
+    }
+
+    #[test]
+    fn test_sdk_control_request_mcp_status() {
+        let request = SDKControlRequest::mcp_status("req-1");
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"subtype\":\"mcp_status\""));
+    }
+
+    #[test]
+    fn test_sdk_control_request_rewind_files() {
+        let request = SDKControlRequest::rewind_files("req-1", "user-msg-123");
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"subtype\":\"rewind_files\""));
+        assert!(json.contains("\"user_message_id\":\"user-msg-123\""));
+    }
+
+    #[test]
+    fn test_control_response_variant_request_id() {
+        let success = ControlResponseVariant::Success {
+            request_id: "req-1".to_string(),
+            response: None,
+        };
+        assert_eq!(success.request_id(), "req-1");
+
+        let error = ControlResponseVariant::Error {
+            request_id: "req-2".to_string(),
+            error: "something went wrong".to_string(),
+        };
+        assert_eq!(error.request_id(), "req-2");
+    }
+
+    #[test]
+    fn test_control_response_variant_is_success() {
+        let success = ControlResponseVariant::Success {
+            request_id: "req-1".to_string(),
+            response: Some(json!({})),
+        };
+        assert!(success.is_success());
+        assert!(!success.is_error());
+    }
+
+    #[test]
+    fn test_control_response_variant_is_error() {
+        let error = ControlResponseVariant::Error {
+            request_id: "req-1".to_string(),
+            error: "error message".to_string(),
+        };
+        assert!(error.is_error());
+        assert!(!error.is_success());
+    }
+
+    #[test]
+    fn test_control_response_variant_response() {
+        let success = ControlResponseVariant::Success {
+            request_id: "req-1".to_string(),
+            response: Some(json!({"key": "value"})),
+        };
+        assert!(success.response().is_some());
+        assert_eq!(success.response().unwrap()["key"], "value");
+
+        let error = ControlResponseVariant::Error {
+            request_id: "req-1".to_string(),
+            error: "error".to_string(),
+        };
+        assert!(error.response().is_none());
+    }
+
+    #[test]
+    fn test_control_response_variant_error() {
+        let success = ControlResponseVariant::Success {
+            request_id: "req-1".to_string(),
+            response: None,
+        };
+        assert!(success.error().is_none());
+
+        let error = ControlResponseVariant::Error {
+            request_id: "req-1".to_string(),
+            error: "error message".to_string(),
+        };
+        assert_eq!(error.error(), Some("error message"));
+    }
+
+    #[test]
+    fn test_sdk_control_interrupt_request_default() {
+        let request = SDKControlInterruptRequest::default();
+        assert_eq!(request.subtype, "interrupt");
+    }
+
+    #[test]
+    fn test_sdk_control_initialize_request_default() {
+        let request = SDKControlInitializeRequest::default();
+        assert_eq!(request.subtype, "initialize");
+        assert!(request.hooks.is_none());
+    }
+
+    #[test]
+    fn test_sdk_control_set_permission_mode_request_new() {
+        let request = SDKControlSetPermissionModeRequest::new("acceptEdits");
+        assert_eq!(request.subtype, "set_permission_mode");
+        assert_eq!(request.mode, "acceptEdits");
+    }
+
+    #[test]
+    fn test_sdk_control_set_model_request_new() {
+        let request = SDKControlSetModelRequest::new(Some("claude-3-5-sonnet".to_string()));
+        assert_eq!(request.subtype, "set_model");
+        assert_eq!(request.model, Some("claude-3-5-sonnet".to_string()));
+    }
+
+    #[test]
+    fn test_sdk_control_rewind_files_request_new() {
+        let request = SDKControlRewindFilesRequest::new("user-msg-123");
+        assert_eq!(request.subtype, "rewind_files");
+        assert_eq!(request.user_message_id, "user-msg-123");
+    }
+
+    #[test]
+    fn test_sdk_control_mcp_status_request_default() {
+        let request = SDKControlMcpStatusRequest::default();
+        assert_eq!(request.subtype, "mcp_status");
+    }
+
+    #[test]
+    fn test_control_request_variant_can_use_tool() {
+        let variant = SDKControlRequestVariant::CanUseTool {
+            tool_name: "Bash".to_string(),
+            input: json!({"command": "ls"}),
+            permission_suggestions: None,
+            blocked_path: None,
+        };
+        let json = serde_json::to_string(&variant).unwrap();
+        assert!(json.contains("\"subtype\":\"can_use_tool\""));
+        assert!(json.contains("\"tool_name\":\"Bash\""));
+    }
+
+    #[test]
+    fn test_control_request_variant_hook_callback() {
+        let variant = SDKControlRequestVariant::HookCallback {
+            callback_id: "hook_0".to_string(),
+            input: json!({"event": "test"}),
+            tool_use_id: Some("tool-123".to_string()),
+        };
+        let json = serde_json::to_string(&variant).unwrap();
+        assert!(json.contains("\"subtype\":\"hook_callback\""));
+        assert!(json.contains("\"callback_id\":\"hook_0\""));
+    }
+
+    #[test]
+    fn test_control_request_variant_mcp_message() {
+        let variant = SDKControlRequestVariant::McpMessage {
+            server_name: "test-server".to_string(),
+            message: json!({"jsonrpc": "2.0", "method": "tools/list", "id": 1}),
+        };
+        let json = serde_json::to_string(&variant).unwrap();
+        assert!(json.contains("\"subtype\":\"mcp_message\""));
+        assert!(json.contains("\"server_name\":\"test-server\""));
+    }
+
+    #[test]
+    fn test_control_request_deserialization() {
+        let json_str = r#"{
+            "type": "control_request",
+            "request_id": "test-req",
+            "request": {
+                "subtype": "interrupt"
+            }
+        }"#;
+        let request: SDKControlRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(request.request_id, "test-req");
+        assert!(matches!(
+            request.request,
+            SDKControlRequestVariant::Interrupt
+        ));
+    }
+
+    #[test]
+    fn test_control_response_deserialization() {
+        let json_str = r#"{
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "test-req",
+                "response": {"status": "ok"}
+            }
+        }"#;
+        let response: SDKControlResponse = serde_json::from_str(json_str).unwrap();
+        assert!(response.is_success());
+        assert_eq!(response.request_id(), "test-req");
+    }
+
+    #[test]
+    fn test_control_request_initialize_with_hooks() {
+        let mut hooks = HashMap::new();
+        hooks.insert("PreToolUse".to_string(), json!([{"matcher": "Bash"}]));
+        let request = SDKControlRequest::initialize("req-1", Some(hooks));
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"subtype\":\"initialize\""));
+        assert!(json.contains("\"hooks\""));
+    }
 }

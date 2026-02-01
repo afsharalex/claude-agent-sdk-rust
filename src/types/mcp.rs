@@ -285,4 +285,127 @@ mod tests {
         let config: McpServerConfig = sse.into();
         assert!(config.is_sse());
     }
+
+    #[test]
+    fn test_stdio_config_with_args() {
+        let config = McpStdioServerConfig::new("npx").with_args(vec!["server.js".to_string()]);
+        assert_eq!(config.command, "npx");
+        assert_eq!(config.args, Some(vec!["server.js".to_string()]));
+    }
+
+    #[test]
+    fn test_stdio_config_with_env() {
+        let mut env = HashMap::new();
+        env.insert("NODE_ENV".to_string(), "production".to_string());
+        let config = McpStdioServerConfig::new("node").with_env(env.clone());
+        assert_eq!(config.env, Some(env));
+    }
+
+    #[test]
+    fn test_sse_config_with_headers() {
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token".to_string());
+        let config =
+            McpSSEServerConfig::new("http://example.com/sse").with_headers(headers.clone());
+        assert_eq!(config.headers, Some(headers));
+    }
+
+    #[test]
+    fn test_http_config_with_headers() {
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        let config =
+            McpHttpServerConfig::new("http://example.com/mcp").with_headers(headers.clone());
+        assert_eq!(config.headers, Some(headers));
+    }
+
+    #[test]
+    fn test_sdk_server_config() {
+        let config = McpSdkServerConfig::new("my-sdk-server");
+        assert_eq!(config.config_type, "sdk");
+        assert_eq!(config.name, "my-sdk-server");
+    }
+
+    #[test]
+    fn test_from_http_config() {
+        let http = McpHttpServerConfig::new("http://example.com");
+        let config: McpServerConfig = http.into();
+        assert!(config.is_http());
+    }
+
+    #[test]
+    fn test_from_sdk_config() {
+        let sdk = McpSdkServerConfig::new("test");
+        let config: McpServerConfig = sdk.into();
+        assert!(config.is_sdk());
+    }
+
+    #[test]
+    fn test_config_type_checks_negative() {
+        let stdio = McpServerConfig::stdio("cmd");
+        assert!(!stdio.is_sse());
+        assert!(!stdio.is_http());
+        assert!(!stdio.is_sdk());
+
+        let sse = McpServerConfig::sse("url");
+        assert!(!sse.is_stdio());
+        assert!(!sse.is_http());
+        assert!(!sse.is_sdk());
+
+        let http = McpServerConfig::http("url");
+        assert!(!http.is_stdio());
+        assert!(!http.is_sse());
+        assert!(!http.is_sdk());
+
+        let sdk = McpServerConfig::sdk("name");
+        assert!(!sdk.is_stdio());
+        assert!(!sdk.is_sse());
+        assert!(!sdk.is_http());
+    }
+
+    #[test]
+    fn test_stdio_config_deserialization() {
+        let json = r#"{"type":"stdio","command":"node","args":["server.js"]}"#;
+        let config: McpServerConfig = serde_json::from_str(json).unwrap();
+        assert!(config.is_stdio());
+        match config {
+            McpServerConfig::Stdio { command, args, .. } => {
+                assert_eq!(command, "node");
+                assert_eq!(args, Some(vec!["server.js".to_string()]));
+            }
+            _ => panic!("Expected Stdio config"),
+        }
+    }
+
+    #[test]
+    fn test_sse_config_deserialization() {
+        let json = r#"{"type":"sse","url":"http://localhost:3000"}"#;
+        let config: McpServerConfig = serde_json::from_str(json).unwrap();
+        assert!(config.is_sse());
+    }
+
+    #[test]
+    fn test_http_config_new() {
+        let config = McpHttpServerConfig::new("http://localhost:8080/mcp");
+        assert_eq!(config.config_type, "http");
+        assert_eq!(config.url, "http://localhost:8080/mcp");
+        assert!(config.headers.is_none());
+    }
+
+    #[test]
+    fn test_sse_config_new() {
+        let config = McpSSEServerConfig::new("http://localhost:3000/events");
+        assert_eq!(config.config_type, "sse");
+        assert_eq!(config.url, "http://localhost:3000/events");
+        assert!(config.headers.is_none());
+    }
+
+    #[test]
+    fn test_stdio_config_default_fields() {
+        let config = McpStdioServerConfig::new("python");
+        assert_eq!(config.config_type, Some("stdio".to_string()));
+        assert_eq!(config.command, "python");
+        assert!(config.args.is_none());
+        assert!(config.env.is_none());
+    }
 }

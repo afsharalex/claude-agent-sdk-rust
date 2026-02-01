@@ -765,4 +765,356 @@ mod tests {
         assert_eq!(plugin.plugin_type, "local");
         assert_eq!(plugin.path, "/path/to/plugin");
     }
+
+    #[test]
+    fn test_builder_cwd() {
+        let options = ClaudeAgentOptions::builder()
+            .cwd("/home/user/project")
+            .build();
+        assert_eq!(
+            options.cwd,
+            Some(std::path::PathBuf::from("/home/user/project"))
+        );
+    }
+
+    #[test]
+    fn test_builder_cli_path() {
+        let options = ClaudeAgentOptions::builder()
+            .cli_path("/usr/local/bin/claude")
+            .build();
+        assert_eq!(
+            options.cli_path,
+            Some(std::path::PathBuf::from("/usr/local/bin/claude"))
+        );
+    }
+
+    #[test]
+    fn test_builder_allowed_tools() {
+        let options = ClaudeAgentOptions::builder()
+            .allowed_tools(vec!["Bash".to_string(), "Read".to_string()])
+            .build();
+        assert_eq!(options.allowed_tools, vec!["Bash", "Read"]);
+    }
+
+    #[test]
+    fn test_builder_disallowed_tools() {
+        let options = ClaudeAgentOptions::builder()
+            .disallowed_tools(vec!["Write".to_string()])
+            .build();
+        assert_eq!(options.disallowed_tools, vec!["Write"]);
+    }
+
+    #[test]
+    fn test_builder_mcp_servers_map() {
+        use crate::types::McpServerConfig;
+        let mut servers = HashMap::new();
+        servers.insert(
+            "test-server".to_string(),
+            McpServerConfig::stdio_with_args("npx", vec!["test-server".to_string()]),
+        );
+        let options = ClaudeAgentOptions::builder()
+            .mcp_servers(servers.clone())
+            .build();
+        match options.mcp_servers {
+            Some(McpServers::Map(m)) => assert_eq!(m.len(), 1),
+            _ => panic!("Expected map"),
+        }
+    }
+
+    #[test]
+    fn test_builder_mcp_servers_path() {
+        let path = std::path::PathBuf::from("/path/to/mcp.json");
+        let options = ClaudeAgentOptions::builder()
+            .mcp_servers(path.clone())
+            .build();
+        match options.mcp_servers {
+            Some(McpServers::Path(p)) => assert_eq!(p, path),
+            _ => panic!("Expected path"),
+        }
+    }
+
+    #[test]
+    fn test_builder_resume_session() {
+        let options = ClaudeAgentOptions::builder().resume("session-123").build();
+        assert_eq!(options.resume, Some("session-123".to_string()));
+    }
+
+    #[test]
+    fn test_builder_continue_conversation() {
+        let options = ClaudeAgentOptions::builder()
+            .continue_conversation(true)
+            .build();
+        assert!(options.continue_conversation);
+    }
+
+    #[test]
+    fn test_builder_agents() {
+        let mut agents = HashMap::new();
+        agents.insert(
+            "reviewer".to_string(),
+            AgentDefinition::new("Code reviewer", "Review code carefully"),
+        );
+        let options = ClaudeAgentOptions::builder().agents(agents).build();
+        assert!(options.agents.is_some());
+        assert_eq!(options.agents.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_builder_setting_sources() {
+        let options = ClaudeAgentOptions::builder()
+            .setting_sources(vec![SettingSource::User, SettingSource::Project])
+            .build();
+        assert_eq!(
+            options.setting_sources,
+            Some(vec![SettingSource::User, SettingSource::Project])
+        );
+    }
+
+    #[test]
+    fn test_builder_sandbox() {
+        use crate::types::SandboxSettings;
+        let sandbox = SandboxSettings::default();
+        let options = ClaudeAgentOptions::builder().sandbox(sandbox).build();
+        assert!(options.sandbox.is_some());
+    }
+
+    #[test]
+    fn test_builder_plugins() {
+        let plugins = vec![SdkPluginConfig::local("/path/to/plugin")];
+        let options = ClaudeAgentOptions::builder().plugins(plugins).build();
+        assert_eq!(options.plugins.len(), 1);
+    }
+
+    #[test]
+    fn test_builder_max_thinking_tokens() {
+        let options = ClaudeAgentOptions::builder()
+            .max_thinking_tokens(1000)
+            .build();
+        assert_eq!(options.max_thinking_tokens, Some(1000));
+    }
+
+    #[test]
+    fn test_builder_output_format() {
+        let format = serde_json::json!({"type": "json"});
+        let options = ClaudeAgentOptions::builder()
+            .output_format(format.clone())
+            .build();
+        assert_eq!(options.output_format, Some(format));
+    }
+
+    #[test]
+    fn test_builder_enable_file_checkpointing() {
+        let options = ClaudeAgentOptions::builder()
+            .enable_file_checkpointing(true)
+            .build();
+        assert!(options.enable_file_checkpointing);
+    }
+
+    #[test]
+    fn test_builder_max_budget_usd() {
+        let options = ClaudeAgentOptions::builder().max_budget_usd(10.0).build();
+        assert_eq!(options.max_budget_usd, Some(10.0));
+    }
+
+    #[test]
+    fn test_builder_fallback_model() {
+        let options = ClaudeAgentOptions::builder()
+            .fallback_model("claude-3-haiku")
+            .build();
+        assert_eq!(options.fallback_model, Some("claude-3-haiku".to_string()));
+    }
+
+    #[test]
+    fn test_builder_betas() {
+        let options = ClaudeAgentOptions::builder()
+            .betas(vec![SdkBeta::Context1m20250807])
+            .build();
+        assert_eq!(options.betas, vec![SdkBeta::Context1m20250807]);
+    }
+
+    #[test]
+    fn test_builder_permission_prompt_tool_name() {
+        let options = ClaudeAgentOptions::builder()
+            .permission_prompt_tool_name("my-tool")
+            .build();
+        assert_eq!(
+            options.permission_prompt_tool_name,
+            Some("my-tool".to_string())
+        );
+    }
+
+    #[test]
+    fn test_builder_settings() {
+        let options = ClaudeAgentOptions::builder()
+            .settings(r#"{"key": "value"}"#)
+            .build();
+        assert_eq!(options.settings, Some(r#"{"key": "value"}"#.to_string()));
+    }
+
+    #[test]
+    fn test_builder_add_dirs() {
+        let dirs = vec![
+            std::path::PathBuf::from("/dir1"),
+            std::path::PathBuf::from("/dir2"),
+        ];
+        let options = ClaudeAgentOptions::builder().add_dirs(dirs.clone()).build();
+        assert_eq!(options.add_dirs, dirs);
+    }
+
+    #[test]
+    fn test_builder_env() {
+        let mut env = HashMap::new();
+        env.insert("KEY".to_string(), "VALUE".to_string());
+        let options = ClaudeAgentOptions::builder().env(env.clone()).build();
+        assert_eq!(options.env, env);
+    }
+
+    #[test]
+    fn test_builder_extra_args() {
+        let mut args = HashMap::new();
+        args.insert("--flag".to_string(), Some("value".to_string()));
+        args.insert("--bool-flag".to_string(), None);
+        let options = ClaudeAgentOptions::builder()
+            .extra_args(args.clone())
+            .build();
+        assert_eq!(options.extra_args, args);
+    }
+
+    #[test]
+    fn test_builder_max_buffer_size() {
+        let options = ClaudeAgentOptions::builder()
+            .max_buffer_size(1024 * 1024)
+            .build();
+        assert_eq!(options.max_buffer_size, Some(1024 * 1024));
+    }
+
+    #[test]
+    fn test_builder_user() {
+        let options = ClaudeAgentOptions::builder().user("test-user").build();
+        assert_eq!(options.user, Some("test-user".to_string()));
+    }
+
+    #[test]
+    fn test_builder_include_partial_messages() {
+        let options = ClaudeAgentOptions::builder()
+            .include_partial_messages(true)
+            .build();
+        assert!(options.include_partial_messages);
+    }
+
+    #[test]
+    fn test_builder_fork_session() {
+        let options = ClaudeAgentOptions::builder().fork_session(true).build();
+        assert!(options.fork_session);
+    }
+
+    #[test]
+    fn test_system_prompt_from_string() {
+        let prompt: SystemPrompt = "You are helpful".into();
+        match prompt {
+            SystemPrompt::Text(text) => assert_eq!(text, "You are helpful"),
+            _ => panic!("Expected text"),
+        }
+    }
+
+    #[test]
+    fn test_system_prompt_preset_claude_code() {
+        let preset = SystemPromptPreset::claude_code();
+        assert_eq!(preset.preset, "claude_code");
+        assert!(preset.append.is_none());
+    }
+
+    #[test]
+    fn test_tools_from_list() {
+        let tools: Tools = vec!["Bash".to_string()].into();
+        match tools {
+            Tools::List(list) => assert_eq!(list, vec!["Bash"]),
+            _ => panic!("Expected list"),
+        }
+    }
+
+    #[test]
+    fn test_tools_preset() {
+        let preset = ToolsPreset::claude_code();
+        let tools: Tools = preset.into();
+        match tools {
+            Tools::Preset(p) => assert_eq!(p.preset, "claude_code"),
+            _ => panic!("Expected preset"),
+        }
+    }
+
+    #[test]
+    fn test_setting_source_serde() {
+        let source = SettingSource::User;
+        let json = serde_json::to_string(&source).unwrap();
+        assert_eq!(json, "\"user\"");
+
+        let source = SettingSource::Project;
+        let json = serde_json::to_string(&source).unwrap();
+        assert_eq!(json, "\"project\"");
+
+        let source = SettingSource::Local;
+        let json = serde_json::to_string(&source).unwrap();
+        assert_eq!(json, "\"local\"");
+    }
+
+    #[test]
+    fn test_sdk_beta_serde() {
+        let beta = SdkBeta::Context1m20250807;
+        let json = serde_json::to_string(&beta).unwrap();
+        assert_eq!(json, "\"context-1m-2025-08-07\"");
+    }
+
+    #[test]
+    fn test_options_clone() {
+        let options = ClaudeAgentOptions::builder()
+            .model("claude-3-5-sonnet")
+            .max_turns(10)
+            .build();
+        let cloned = options.clone();
+        assert_eq!(cloned.model, options.model);
+        assert_eq!(cloned.max_turns, options.max_turns);
+    }
+
+    #[test]
+    fn test_options_debug() {
+        let options = ClaudeAgentOptions::builder()
+            .model("claude-3-5-sonnet")
+            .build();
+        let debug_str = format!("{:?}", options);
+        assert!(debug_str.contains("claude-3-5-sonnet"));
+    }
+
+    #[test]
+    fn test_builder_clone() {
+        let builder = ClaudeAgentOptions::builder().model("claude-3-5-sonnet");
+        let cloned = builder.clone();
+        let options = cloned.max_turns(5).build();
+        assert_eq!(options.model, Some("claude-3-5-sonnet".to_string()));
+        assert_eq!(options.max_turns, Some(5));
+    }
+
+    #[test]
+    fn test_builder_new() {
+        let builder = ClaudeAgentOptionsBuilder::new();
+        let options = builder.build();
+        assert!(options.model.is_none());
+    }
+
+    #[test]
+    fn test_options_default() {
+        let options = ClaudeAgentOptions::default();
+        assert!(options.model.is_none());
+        assert!(options.tools.is_none());
+        assert!(!options.continue_conversation);
+    }
+
+    #[test]
+    fn test_agent_definition_without_optional_fields() {
+        let agent = AgentDefinition::new("Test agent", "Test prompt");
+        assert_eq!(agent.description, "Test agent");
+        assert_eq!(agent.prompt, "Test prompt");
+        assert!(agent.tools.is_none());
+        assert!(agent.model.is_none());
+    }
 }
