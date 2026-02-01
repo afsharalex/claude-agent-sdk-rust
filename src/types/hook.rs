@@ -462,4 +462,277 @@ mod tests {
         let output = PreToolUseHookSpecificOutput::new();
         assert_eq!(output.hook_event_name, "PreToolUse");
     }
+
+    #[test]
+    fn test_hook_event_all_variants() {
+        let events = [
+            (HookEvent::PreToolUse, "PreToolUse"),
+            (HookEvent::PostToolUse, "PostToolUse"),
+            (HookEvent::PostToolUseFailure, "PostToolUseFailure"),
+            (HookEvent::UserPromptSubmit, "UserPromptSubmit"),
+            (HookEvent::Stop, "Stop"),
+            (HookEvent::SubagentStop, "SubagentStop"),
+            (HookEvent::PreCompact, "PreCompact"),
+        ];
+
+        for (event, expected_str) in events {
+            assert_eq!(event.as_str(), expected_str);
+            assert_eq!(format!("{}", event), expected_str);
+        }
+    }
+
+    #[test]
+    fn test_hook_json_output_with_stop_reason() {
+        let output = HookJSONOutput::new().with_stop_reason("User cancelled");
+        assert_eq!(output.should_continue, Some(false));
+        assert_eq!(output.stop_reason, Some("User cancelled".to_string()));
+    }
+
+    #[test]
+    fn test_hook_json_output_with_hook_specific_output() {
+        let specific = HookSpecificOutput::PreToolUse(PreToolUseHookSpecificOutput::new());
+        let output = HookJSONOutput::new().with_hook_specific_output(specific);
+        assert!(output.hook_specific_output.is_some());
+    }
+
+    #[test]
+    fn test_hook_context_new() {
+        let context = HookContext::new();
+        assert!(context.signal.is_none());
+    }
+
+    #[test]
+    fn test_hook_matcher_default() {
+        let matcher = HookMatcher::default();
+        assert!(matcher.matcher.is_none());
+        assert!(matcher.hooks.is_empty());
+        assert!(matcher.timeout.is_none());
+    }
+
+    #[test]
+    fn test_hook_matcher_debug() {
+        let matcher = HookMatcher::new().with_matcher("Bash").with_timeout(30.0);
+        let debug_str = format!("{:?}", matcher);
+        assert!(debug_str.contains("Bash"));
+        assert!(debug_str.contains("30.0"));
+    }
+
+    #[test]
+    fn test_post_tool_use_hook_specific_output() {
+        let output = PostToolUseHookSpecificOutput::new();
+        assert_eq!(output.hook_event_name, "PostToolUse");
+        assert!(output.additional_context.is_none());
+    }
+
+    #[test]
+    fn test_post_tool_use_failure_hook_specific_output() {
+        let output = PostToolUseFailureHookSpecificOutput::new();
+        assert_eq!(output.hook_event_name, "PostToolUseFailure");
+    }
+
+    #[test]
+    fn test_user_prompt_submit_hook_specific_output() {
+        let output = UserPromptSubmitHookSpecificOutput::new();
+        assert_eq!(output.hook_event_name, "UserPromptSubmit");
+    }
+
+    #[test]
+    fn test_pre_compact_trigger_serde() {
+        let manual = PreCompactTrigger::Manual;
+        let json = serde_json::to_string(&manual).unwrap();
+        assert_eq!(json, "\"manual\"");
+
+        let auto = PreCompactTrigger::Auto;
+        let json = serde_json::to_string(&auto).unwrap();
+        assert_eq!(json, "\"auto\"");
+    }
+
+    #[test]
+    fn test_hook_permission_decision_serde() {
+        let allow = HookPermissionDecision::Allow;
+        let json = serde_json::to_string(&allow).unwrap();
+        assert_eq!(json, "\"allow\"");
+
+        let deny = HookPermissionDecision::Deny;
+        let json = serde_json::to_string(&deny).unwrap();
+        assert_eq!(json, "\"deny\"");
+
+        let ask = HookPermissionDecision::Ask;
+        let json = serde_json::to_string(&ask).unwrap();
+        assert_eq!(json, "\"ask\"");
+    }
+
+    #[test]
+    fn test_base_hook_input() {
+        let input = BaseHookInput {
+            session_id: "session-123".to_string(),
+            transcript_path: "/path/to/transcript".to_string(),
+            cwd: "/home/user".to_string(),
+            permission_mode: Some("acceptEdits".to_string()),
+        };
+        assert_eq!(input.session_id, "session-123");
+        assert_eq!(input.permission_mode, Some("acceptEdits".to_string()));
+    }
+
+    #[test]
+    fn test_hook_input_hook_event_name() {
+        let base = BaseHookInput {
+            session_id: "session-123".to_string(),
+            transcript_path: "/path".to_string(),
+            cwd: "/home".to_string(),
+            permission_mode: None,
+        };
+
+        let pre_tool = HookInput::PreToolUse(PreToolUseHookInput {
+            base: base.clone(),
+            hook_event_name: "PreToolUse".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({}),
+        });
+        assert_eq!(pre_tool.hook_event_name(), "PreToolUse");
+
+        let stop = HookInput::Stop(StopHookInput {
+            base: base.clone(),
+            hook_event_name: "Stop".to_string(),
+            stop_hook_active: true,
+        });
+        assert_eq!(stop.hook_event_name(), "Stop");
+    }
+
+    #[test]
+    fn test_hook_input_base() {
+        let base = BaseHookInput {
+            session_id: "session-123".to_string(),
+            transcript_path: "/path".to_string(),
+            cwd: "/home".to_string(),
+            permission_mode: None,
+        };
+
+        let input = HookInput::SubagentStop(SubagentStopHookInput {
+            base: base.clone(),
+            hook_event_name: "SubagentStop".to_string(),
+            stop_hook_active: false,
+        });
+        assert_eq!(input.base().session_id, "session-123");
+    }
+
+    #[test]
+    fn test_hook_json_output_default() {
+        let output = HookJSONOutput::default();
+        assert!(output.should_continue.is_none());
+        assert!(output.is_async.is_none());
+        assert!(output.stop_reason.is_none());
+    }
+
+    #[test]
+    fn test_pre_tool_use_hook_input_serde() {
+        let input = PreToolUseHookInput {
+            base: BaseHookInput {
+                session_id: "session-123".to_string(),
+                transcript_path: "/path".to_string(),
+                cwd: "/home".to_string(),
+                permission_mode: None,
+            },
+            hook_event_name: "PreToolUse".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "ls"}),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        assert!(json.contains("\"tool_name\":\"Bash\""));
+        assert!(json.contains("\"session_id\":\"session-123\""));
+    }
+
+    #[test]
+    fn test_post_tool_use_hook_input() {
+        let input = PostToolUseHookInput {
+            base: BaseHookInput {
+                session_id: "session-123".to_string(),
+                transcript_path: "/path".to_string(),
+                cwd: "/home".to_string(),
+                permission_mode: None,
+            },
+            hook_event_name: "PostToolUse".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({}),
+            tool_response: serde_json::json!({"output": "success"}),
+        };
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.tool_response["output"], "success");
+    }
+
+    #[test]
+    fn test_post_tool_use_failure_hook_input() {
+        let input = PostToolUseFailureHookInput {
+            base: BaseHookInput {
+                session_id: "session-123".to_string(),
+                transcript_path: "/path".to_string(),
+                cwd: "/home".to_string(),
+                permission_mode: None,
+            },
+            hook_event_name: "PostToolUseFailure".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({}),
+            tool_use_id: "tool-123".to_string(),
+            error: "Command failed".to_string(),
+            is_interrupt: Some(true),
+        };
+        assert_eq!(input.error, "Command failed");
+        assert_eq!(input.is_interrupt, Some(true));
+    }
+
+    #[test]
+    fn test_user_prompt_submit_hook_input() {
+        let input = UserPromptSubmitHookInput {
+            base: BaseHookInput {
+                session_id: "session-123".to_string(),
+                transcript_path: "/path".to_string(),
+                cwd: "/home".to_string(),
+                permission_mode: None,
+            },
+            hook_event_name: "UserPromptSubmit".to_string(),
+            prompt: "Hello Claude".to_string(),
+        };
+        assert_eq!(input.prompt, "Hello Claude");
+    }
+
+    #[test]
+    fn test_pre_compact_hook_input() {
+        let input = PreCompactHookInput {
+            base: BaseHookInput {
+                session_id: "session-123".to_string(),
+                transcript_path: "/path".to_string(),
+                cwd: "/home".to_string(),
+                permission_mode: None,
+            },
+            hook_event_name: "PreCompact".to_string(),
+            trigger: PreCompactTrigger::Auto,
+            custom_instructions: Some("Focus on key points".to_string()),
+        };
+        assert_eq!(input.trigger, PreCompactTrigger::Auto);
+        assert_eq!(
+            input.custom_instructions,
+            Some("Focus on key points".to_string())
+        );
+    }
+
+    #[test]
+    fn test_hook_event_serde() {
+        let event = HookEvent::PreToolUse;
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(json, "\"PreToolUse\"");
+
+        let parsed: HookEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, HookEvent::PreToolUse);
+    }
+
+    #[test]
+    fn test_hook_specific_output_variants() {
+        let pre_tool = HookSpecificOutput::PreToolUse(PreToolUseHookSpecificOutput::new());
+        let json = serde_json::to_string(&pre_tool).unwrap();
+        assert!(json.contains("PreToolUse"));
+
+        let post_tool = HookSpecificOutput::PostToolUse(PostToolUseHookSpecificOutput::new());
+        let json = serde_json::to_string(&post_tool).unwrap();
+        assert!(json.contains("PostToolUse"));
+    }
 }

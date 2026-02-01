@@ -410,4 +410,241 @@ mod tests {
         assert_eq!(rule.tool_name, "Bash");
         assert_eq!(rule.rule_content, Some("allow 'ls' command".to_string()));
     }
+
+    #[test]
+    fn test_permission_mode_default() {
+        let mode = PermissionMode::default();
+        assert_eq!(mode, PermissionMode::Default);
+        assert_eq!(mode.as_str(), "default");
+    }
+
+    #[test]
+    fn test_permission_mode_display() {
+        assert_eq!(format!("{}", PermissionMode::Default), "default");
+        assert_eq!(format!("{}", PermissionMode::AcceptEdits), "acceptEdits");
+        assert_eq!(format!("{}", PermissionMode::Plan), "plan");
+        assert_eq!(
+            format!("{}", PermissionMode::BypassPermissions),
+            "bypassPermissions"
+        );
+    }
+
+    #[test]
+    fn test_permission_behavior_serde() {
+        let allow = PermissionBehavior::Allow;
+        let json = serde_json::to_string(&allow).unwrap();
+        assert_eq!(json, "\"allow\"");
+
+        let deny = PermissionBehavior::Deny;
+        let json = serde_json::to_string(&deny).unwrap();
+        assert_eq!(json, "\"deny\"");
+
+        let ask = PermissionBehavior::Ask;
+        let json = serde_json::to_string(&ask).unwrap();
+        assert_eq!(json, "\"ask\"");
+    }
+
+    #[test]
+    fn test_permission_update_destination_serde() {
+        let destinations = [
+            (
+                PermissionUpdateDestination::UserSettings,
+                "\"userSettings\"",
+            ),
+            (
+                PermissionUpdateDestination::ProjectSettings,
+                "\"projectSettings\"",
+            ),
+            (
+                PermissionUpdateDestination::LocalSettings,
+                "\"localSettings\"",
+            ),
+            (PermissionUpdateDestination::Session, "\"session\""),
+        ];
+
+        for (dest, expected) in destinations {
+            let json = serde_json::to_string(&dest).unwrap();
+            assert_eq!(json, expected);
+        }
+    }
+
+    #[test]
+    fn test_permission_update_replace_rules() {
+        let update = PermissionUpdate::replace_rules(
+            vec![PermissionRuleValue::new("Bash")],
+            PermissionBehavior::Deny,
+        );
+        assert_eq!(update.update_type, PermissionUpdateType::ReplaceRules);
+        assert!(update.rules.is_some());
+        assert_eq!(update.behavior, Some(PermissionBehavior::Deny));
+    }
+
+    #[test]
+    fn test_permission_update_remove_rules() {
+        let update = PermissionUpdate::remove_rules(vec![PermissionRuleValue::new("Write")]);
+        assert_eq!(update.update_type, PermissionUpdateType::RemoveRules);
+        assert!(update.rules.is_some());
+        assert!(update.behavior.is_none());
+    }
+
+    #[test]
+    fn test_permission_update_add_directories() {
+        let update = PermissionUpdate::add_directories(vec!["/home/user".to_string()]);
+        assert_eq!(update.update_type, PermissionUpdateType::AddDirectories);
+        assert!(update.directories.is_some());
+        assert_eq!(update.directories.unwrap(), vec!["/home/user"]);
+    }
+
+    #[test]
+    fn test_permission_update_remove_directories() {
+        let update = PermissionUpdate::remove_directories(vec!["/tmp".to_string()]);
+        assert_eq!(update.update_type, PermissionUpdateType::RemoveDirectories);
+        assert!(update.directories.is_some());
+    }
+
+    #[test]
+    fn test_permission_update_with_destination() {
+        let update = PermissionUpdate::set_mode(PermissionMode::AcceptEdits)
+            .with_destination(PermissionUpdateDestination::Session);
+        assert_eq!(
+            update.destination,
+            Some(PermissionUpdateDestination::Session)
+        );
+    }
+
+    #[test]
+    fn test_permission_update_to_dict_add_rules() {
+        let update = PermissionUpdate::add_rules(
+            vec![PermissionRuleValue::new("Bash").with_content("allow")],
+            PermissionBehavior::Allow,
+        )
+        .with_destination(PermissionUpdateDestination::Session);
+        let dict = update.to_dict();
+        assert!(dict.contains_key("type"));
+        assert!(dict.contains_key("rules"));
+        assert!(dict.contains_key("behavior"));
+        assert!(dict.contains_key("destination"));
+    }
+
+    #[test]
+    fn test_permission_update_to_dict_set_mode() {
+        let update = PermissionUpdate::set_mode(PermissionMode::Plan);
+        let dict = update.to_dict();
+        assert!(dict.contains_key("mode"));
+        assert!(!dict.contains_key("rules"));
+    }
+
+    #[test]
+    fn test_permission_update_to_dict_directories() {
+        let update = PermissionUpdate::add_directories(vec!["/path".to_string()]);
+        let dict = update.to_dict();
+        assert!(dict.contains_key("directories"));
+    }
+
+    #[test]
+    fn test_tool_permission_context_new() {
+        let context = ToolPermissionContext::new();
+        assert!(context.signal.is_none());
+        assert!(context.suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_tool_permission_context_with_suggestions() {
+        let suggestions = vec![PermissionUpdate::set_mode(PermissionMode::AcceptEdits)];
+        let context = ToolPermissionContext::new().with_suggestions(suggestions);
+        assert_eq!(context.suggestions.len(), 1);
+    }
+
+    #[test]
+    fn test_permission_result_allow_default() {
+        let allow = PermissionResultAllow::default();
+        assert_eq!(allow.behavior, "allow");
+        assert!(allow.updated_input.is_none());
+        assert!(allow.updated_permissions.is_none());
+    }
+
+    #[test]
+    fn test_permission_result_allow_with_updated_input() {
+        let allow = PermissionResultAllow::new()
+            .with_updated_input(serde_json::json!({"command": "ls -la"}));
+        assert!(allow.updated_input.is_some());
+    }
+
+    #[test]
+    fn test_permission_result_allow_with_updated_permissions() {
+        let allow = PermissionResultAllow::new().with_updated_permissions(vec![
+            PermissionUpdate::set_mode(PermissionMode::AcceptEdits),
+        ]);
+        assert!(allow.updated_permissions.is_some());
+        assert_eq!(allow.updated_permissions.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_permission_result_deny_default() {
+        let deny = PermissionResultDeny::default();
+        assert_eq!(deny.behavior, "deny");
+        assert!(deny.message.is_empty());
+        assert!(!deny.interrupt);
+    }
+
+    #[test]
+    fn test_permission_result_deny_with_message() {
+        let deny = PermissionResultDeny::new().with_message("Not allowed");
+        assert_eq!(deny.message, "Not allowed");
+    }
+
+    #[test]
+    fn test_permission_result_deny_with_interrupt() {
+        let deny = PermissionResultDeny::new().with_interrupt(true);
+        assert!(deny.interrupt);
+    }
+
+    #[test]
+    fn test_permission_result_serde() {
+        let allow = PermissionResult::allow();
+        let json = serde_json::to_string(&allow).unwrap();
+        assert!(json.contains("\"behavior\":\"allow\""));
+
+        let deny = PermissionResult::deny_with_message("Test");
+        let json = serde_json::to_string(&deny).unwrap();
+        assert!(json.contains("\"behavior\":\"deny\""));
+        assert!(json.contains("\"message\":\"Test\""));
+    }
+
+    #[test]
+    fn test_permission_rule_value_new() {
+        let rule = PermissionRuleValue::new("Write");
+        assert_eq!(rule.tool_name, "Write");
+        assert!(rule.rule_content.is_none());
+    }
+
+    #[test]
+    fn test_permission_update_type_serde() {
+        let types = [
+            (PermissionUpdateType::AddRules, "\"addRules\""),
+            (PermissionUpdateType::ReplaceRules, "\"replaceRules\""),
+            (PermissionUpdateType::RemoveRules, "\"removeRules\""),
+            (PermissionUpdateType::SetMode, "\"setMode\""),
+            (PermissionUpdateType::AddDirectories, "\"addDirectories\""),
+            (
+                PermissionUpdateType::RemoveDirectories,
+                "\"removeDirectories\"",
+            ),
+        ];
+
+        for (update_type, expected) in types {
+            let json = serde_json::to_string(&update_type).unwrap();
+            assert_eq!(json, expected);
+        }
+    }
+
+    #[test]
+    fn test_permission_mode_json_serde() {
+        let mode = PermissionMode::AcceptEdits;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, "\"acceptEdits\"");
+
+        let parsed: PermissionMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, PermissionMode::AcceptEdits);
+    }
 }

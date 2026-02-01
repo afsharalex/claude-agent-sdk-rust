@@ -278,4 +278,99 @@ mod tests {
         let content: ContentBlock = thinking_block.into();
         assert!(content.is_thinking());
     }
+
+    #[test]
+    fn test_tool_use_block_from_conversion() {
+        let tool_use_block = ToolUseBlock::new("tool-123", "Bash", json!({"command": "ls"}));
+        let content: ContentBlock = tool_use_block.into();
+        assert!(content.is_tool_use());
+    }
+
+    #[test]
+    fn test_tool_result_block_from_conversion() {
+        let tool_result_block = ToolResultBlock::new("tool-123")
+            .with_content(json!("output"))
+            .with_error(false);
+        let content: ContentBlock = tool_result_block.into();
+        assert!(content.is_tool_result());
+    }
+
+    #[test]
+    fn test_text_block_new() {
+        let block = TextBlock::new("Hello");
+        assert_eq!(block.text, "Hello");
+    }
+
+    #[test]
+    fn test_thinking_block_new() {
+        let block = ThinkingBlock::new("I'm thinking", "signature123");
+        assert_eq!(block.thinking, "I'm thinking");
+        assert_eq!(block.signature, "signature123");
+    }
+
+    #[test]
+    fn test_tool_use_block_new() {
+        let block = ToolUseBlock::new("id-1", "Bash", json!({"cmd": "ls"}));
+        assert_eq!(block.id, "id-1");
+        assert_eq!(block.name, "Bash");
+        assert_eq!(block.input["cmd"], "ls");
+    }
+
+    #[test]
+    fn test_tool_result_block_builder() {
+        let block = ToolResultBlock::new("tool-123");
+        assert_eq!(block.tool_use_id, "tool-123");
+        assert!(block.content.is_none());
+        assert!(block.is_error.is_none());
+
+        let block_with_content = ToolResultBlock::new("tool-456").with_content(json!("result"));
+        assert!(block_with_content.content.is_some());
+
+        let block_with_error = ToolResultBlock::new("tool-789").with_error(true);
+        assert_eq!(block_with_error.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_content_block_all_types_not_text() {
+        let thinking = ContentBlock::thinking("t", "s");
+        assert!(!thinking.is_text());
+        assert!(!thinking.is_tool_use());
+        assert!(!thinking.is_tool_result());
+        assert!(thinking.as_text().is_none());
+
+        let tool_use = ContentBlock::tool_use("id", "name", json!({}));
+        assert!(!tool_use.is_text());
+        assert!(!tool_use.is_thinking());
+        assert!(!tool_use.is_tool_result());
+
+        let tool_result = ContentBlock::tool_result("id", None, None);
+        assert!(!tool_result.is_text());
+        assert!(!tool_result.is_thinking());
+        assert!(!tool_result.is_tool_use());
+    }
+
+    #[test]
+    fn test_content_block_serialization_roundtrip() {
+        let blocks = vec![
+            ContentBlock::text("Hello"),
+            ContentBlock::thinking("Hmm", "sig"),
+            ContentBlock::tool_use("id1", "Bash", json!({})),
+            ContentBlock::tool_result("id1", Some(json!("done")), Some(false)),
+        ];
+
+        for block in blocks {
+            let json = serde_json::to_string(&block).unwrap();
+            let parsed: ContentBlock = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, block);
+        }
+    }
+
+    #[test]
+    fn test_tool_result_with_none_values() {
+        let block = ContentBlock::tool_result("id1", None, None);
+        let json = serde_json::to_string(&block).unwrap();
+        // content and is_error should not be in the JSON when None
+        assert!(!json.contains("\"content\""));
+        assert!(!json.contains("\"is_error\""));
+    }
 }

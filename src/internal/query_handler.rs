@@ -969,4 +969,277 @@ mod tests {
             .to_string()
             .contains("No hook callback found"));
     }
+
+    #[tokio::test]
+    async fn test_query_handler_non_streaming_mode() {
+        let transport = Box::new(MockTransport::empty());
+        let handler = QueryHandler::new(transport, false, None, HashMap::new(), 60);
+
+        // In non-streaming mode, initialization should be None
+        assert!(!handler.initialized);
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_start() {
+        let transport = Box::new(MockTransport::empty());
+        let mut handler = QueryHandler::new(transport, false, None, HashMap::new(), 60);
+
+        let result = handler.start().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_control_request_static_can_use_tool_allow() {
+        use std::sync::Arc;
+
+        let can_use_tool: crate::types::CanUseToolFn = Arc::new(|_tool_name, _input, _context| {
+            Box::pin(async move { crate::types::PermissionResult::allow() })
+        });
+
+        let request = SDKControlRequestVariant::CanUseTool {
+            tool_name: "Bash".to_string(),
+            input: json!({"command": "ls"}),
+            permission_suggestions: None,
+            blocked_path: None,
+        };
+
+        let result = handle_control_request_static(
+            &request,
+            &Some(can_use_tool),
+            &Arc::new(Mutex::new(HashMap::new())),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response["behavior"], "allow");
+    }
+
+    #[tokio::test]
+    async fn test_handle_control_request_static_can_use_tool_deny() {
+        use std::sync::Arc;
+
+        let can_use_tool: crate::types::CanUseToolFn = Arc::new(|_tool_name, _input, _context| {
+            Box::pin(async move {
+                crate::types::PermissionResult::Deny(
+                    crate::types::PermissionResultDeny::new()
+                        .with_message("Not allowed")
+                        .with_interrupt(true),
+                )
+            })
+        });
+
+        let request = SDKControlRequestVariant::CanUseTool {
+            tool_name: "Bash".to_string(),
+            input: json!({"command": "rm -rf /"}),
+            permission_suggestions: None,
+            blocked_path: None,
+        };
+
+        let result = handle_control_request_static(
+            &request,
+            &Some(can_use_tool),
+            &Arc::new(Mutex::new(HashMap::new())),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response["behavior"], "deny");
+        assert_eq!(response["message"], "Not allowed");
+        assert_eq!(response["interrupt"], true);
+    }
+
+    #[tokio::test]
+    async fn test_handle_control_request_static_unsupported() {
+        let request = SDKControlRequestVariant::Interrupt;
+
+        let result =
+            handle_control_request_static(&request, &None, &Arc::new(Mutex::new(HashMap::new())))
+                .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported control request"));
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_flush_responses_with_queued() {
+        let mock = MockTransport::empty();
+        let written = mock.written.clone();
+        let transport = Box::new(mock);
+
+        let mut handler = QueryHandler::new(transport, true, None, HashMap::new(), 60);
+
+        // Manually add a response to the queue
+        handler
+            .outgoing_responses
+            .lock()
+            .await
+            .push("{\"test\":true}\n".to_string());
+
+        let result = handler.flush_responses().await;
+        assert!(result.is_ok());
+
+        let written_messages = written.lock().await;
+        assert_eq!(written_messages.len(), 1);
+        assert!(written_messages[0].contains("test"));
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_receive_control_cancel_request() {
+        let messages = vec![
+            json!({
+                "type": "control_cancel_request",
+                "request_id": "test-req"
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hello"}],
+                    "model": "claude-3-5-sonnet",
+                    "stop_reason": "end_turn"
+                }
+            }),
+        ];
+
+        let transport = Box::new(MockTransport::new(messages));
+        let mut handler = QueryHandler::new(transport, true, None, HashMap::new(), 60);
+
+        let stream = handler.receive_messages();
+        tokio::pin!(stream);
+
+        let mut received = Vec::new();
+        while let Some(result) = futures::StreamExt::next(&mut stream).await {
+            received.push(result.unwrap());
+        }
+
+        // Only the assistant message should be yielded, control_cancel_request is skipped
+        assert_eq!(received.len(), 1);
+        assert!(received[0].is_assistant());
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_initialization_result() {
+        let transport = Box::new(MockTransport::empty());
+        let handler = QueryHandler::new(transport, false, None, HashMap::new(), 60);
+
+        assert!(handler.initialization_result().is_none());
+    }
+
+    #[test]
+    fn test_rand_hex_produces_different_values() {
+        // Call multiple times to ensure it works
+        let results: Vec<String> = (0..10).map(|_| rand_hex()).collect();
+
+        // All should be valid hex
+        for hex in &results {
+            assert!(!hex.is_empty());
+            for c in hex.chars() {
+                assert!(c.is_ascii_hexdigit());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_with_can_use_tool() {
+        use std::sync::Arc;
+
+        let can_use_tool: crate::types::CanUseToolFn = Arc::new(|_tool_name, _input, _context| {
+            Box::pin(async move { crate::types::PermissionResult::allow() })
+        });
+
+        let transport = Box::new(MockTransport::empty());
+        let handler = QueryHandler::new(transport, true, Some(can_use_tool), HashMap::new(), 60);
+
+        assert!(handler.can_use_tool.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_with_hooks() {
+        use crate::types::{HookEvent, HookMatcher};
+
+        let mut hooks = HashMap::new();
+        hooks.insert(HookEvent::PreToolUse, vec![HookMatcher::new()]);
+
+        let transport = Box::new(MockTransport::empty());
+        let handler = QueryHandler::new(transport, true, None, hooks, 60);
+
+        assert_eq!(handler.hooks.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_handle_control_request_static_allow_with_updated_input() {
+        use std::sync::Arc;
+
+        let can_use_tool: crate::types::CanUseToolFn = Arc::new(|_tool_name, _input, _context| {
+            Box::pin(async move {
+                crate::types::PermissionResult::Allow(
+                    crate::types::PermissionResultAllow::new()
+                        .with_updated_input(json!({"command": "ls -la"})),
+                )
+            })
+        });
+
+        let request = SDKControlRequestVariant::CanUseTool {
+            tool_name: "Bash".to_string(),
+            input: json!({"command": "ls"}),
+            permission_suggestions: None,
+            blocked_path: None,
+        };
+
+        let result = handle_control_request_static(
+            &request,
+            &Some(can_use_tool),
+            &Arc::new(Mutex::new(HashMap::new())),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response["behavior"], "allow");
+        assert_eq!(response["updatedInput"]["command"], "ls -la");
+    }
+
+    #[tokio::test]
+    async fn test_handle_control_request_static_allow_with_permissions() {
+        use crate::types::{PermissionBehavior, PermissionRuleValue, PermissionUpdate};
+        use std::sync::Arc;
+
+        let can_use_tool: crate::types::CanUseToolFn = Arc::new(|_tool_name, _input, _context| {
+            Box::pin(async move {
+                crate::types::PermissionResult::Allow(
+                    crate::types::PermissionResultAllow::new().with_updated_permissions(vec![
+                        PermissionUpdate::add_rules(
+                            vec![PermissionRuleValue::new("Bash")],
+                            PermissionBehavior::Allow,
+                        ),
+                    ]),
+                )
+            })
+        });
+
+        let request = SDKControlRequestVariant::CanUseTool {
+            tool_name: "Bash".to_string(),
+            input: json!({"command": "ls"}),
+            permission_suggestions: None,
+            blocked_path: None,
+        };
+
+        let result = handle_control_request_static(
+            &request,
+            &Some(can_use_tool),
+            &Arc::new(Mutex::new(HashMap::new())),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response["behavior"], "allow");
+        assert!(response.get("updatedPermissions").is_some());
+    }
 }
