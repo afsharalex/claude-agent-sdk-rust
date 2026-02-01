@@ -35,6 +35,11 @@ pub trait Transport: Send + Sync {
     /// Returns a stream of parsed JSON messages.
     fn read_messages(&mut self) -> Pin<Box<dyn Stream<Item = Result<Value>> + Send + '_>>;
 
+    /// Read a single message from the transport.
+    ///
+    /// Returns the next available message or None if the stream ended.
+    async fn read_next_message(&mut self) -> Result<Option<Value>>;
+
     /// Close the transport connection and clean up resources.
     async fn close(&mut self) -> Result<()>;
 

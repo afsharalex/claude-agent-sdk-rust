@@ -42,6 +42,8 @@ pub struct SubprocessCLITransport {
     ready: bool,
     max_buffer_size: usize,
     is_streaming: bool,
+    /// Buffer for accumulating partial JSON
+    json_buffer: String,
 }
 
 impl SubprocessCLITransport {
@@ -67,6 +69,7 @@ impl SubprocessCLITransport {
             ready: false,
             max_buffer_size,
             is_streaming: false,
+            json_buffer: String::new(),
         })
     }
 
@@ -92,6 +95,7 @@ impl SubprocessCLITransport {
             ready: false,
             max_buffer_size,
             is_streaming: true,
+            json_buffer: String::new(),
         })
     }
 
@@ -570,57 +574,60 @@ impl Transport for SubprocessCLITransport {
     }
 
     fn read_messages(&mut self) -> Pin<Box<dyn Stream<Item = Result<Value>> + Send + '_>> {
-        let stdout = self.stdout.take();
-        let max_buffer_size = self.max_buffer_size;
-
         Box::pin(async_stream::try_stream! {
-            let mut stdout = stdout.ok_or_else(|| {
-                ClaudeSDKError::CLIConnection("Not connected".to_string())
-            })?;
-
-            let mut json_buffer = String::new();
-            let mut line = String::new();
-
-            loop {
-                line.clear();
-                let bytes_read = stdout.read_line(&mut line).await.map_err(|e| {
-                    ClaudeSDKError::CLIConnection(format!("Failed to read from stdout: {}", e))
-                })?;
-
-                if bytes_read == 0 {
-                    break; // EOF
-                }
-
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-
-                // Accumulate partial JSON
-                json_buffer.push_str(trimmed);
-
-                if json_buffer.len() > max_buffer_size {
-                    let len = json_buffer.len();
-                    json_buffer.clear();
-                    Err(ClaudeSDKError::CLIConnection(format!(
-                        "JSON message exceeded maximum buffer size of {} bytes (got {})",
-                        max_buffer_size, len
-                    )))?;
-                }
-
-                // Try to parse
-                match serde_json::from_str::<Value>(&json_buffer) {
-                    Ok(data) => {
-                        json_buffer.clear();
-                        yield data;
-                    }
-                    Err(_) => {
-                        // Keep accumulating
-                        continue;
-                    }
-                }
+            while let Some(data) = self.read_next_message().await? {
+                yield data;
             }
         })
+    }
+
+    async fn read_next_message(&mut self) -> Result<Option<Value>> {
+        let stdout = self
+            .stdout
+            .as_mut()
+            .ok_or_else(|| ClaudeSDKError::CLIConnection("Not connected".to_string()))?;
+
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            let bytes_read = stdout.read_line(&mut line).await.map_err(|e| {
+                ClaudeSDKError::CLIConnection(format!("Failed to read from stdout: {}", e))
+            })?;
+
+            if bytes_read == 0 {
+                return Ok(None); // EOF
+            }
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Accumulate partial JSON
+            self.json_buffer.push_str(trimmed);
+
+            if self.json_buffer.len() > self.max_buffer_size {
+                let len = self.json_buffer.len();
+                self.json_buffer.clear();
+                return Err(ClaudeSDKError::CLIConnection(format!(
+                    "JSON message exceeded maximum buffer size of {} bytes (got {})",
+                    self.max_buffer_size, len
+                )));
+            }
+
+            // Try to parse
+            match serde_json::from_str::<Value>(&self.json_buffer) {
+                Ok(data) => {
+                    self.json_buffer.clear();
+                    return Ok(Some(data));
+                }
+                Err(_) => {
+                    // Keep accumulating
+                    continue;
+                }
+            }
+        }
     }
 
     async fn close(&mut self) -> Result<()> {
@@ -697,6 +704,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -726,6 +734,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: true,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -754,6 +763,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -783,6 +793,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -834,6 +845,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -857,6 +869,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -882,6 +895,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -903,6 +917,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         assert!(!transport.is_ready());
@@ -923,6 +938,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         assert!(transport.cwd.is_some());
@@ -946,6 +962,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -971,6 +988,7 @@ mod tests {
             ready: false,
             max_buffer_size: options.max_buffer_size.unwrap_or(DEFAULT_MAX_BUFFER_SIZE),
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         assert_eq!(transport.max_buffer_size, 1024 * 1024);
@@ -993,6 +1011,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1018,6 +1037,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1040,6 +1060,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1064,6 +1085,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1091,6 +1113,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1117,6 +1140,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1146,6 +1170,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1174,6 +1199,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1202,6 +1228,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1225,6 +1252,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         // User isn't directly added to command line in this implementation
@@ -1258,6 +1286,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1292,6 +1321,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1323,6 +1353,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1345,6 +1376,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         assert_eq!(transport.max_buffer_size, 1024 * 1024); // 1MB default
@@ -1365,6 +1397,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         let cmd = transport.build_command();
@@ -1389,6 +1422,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         assert!(transport.build_settings_value().is_none());
@@ -1411,6 +1445,7 @@ mod tests {
             ready: false,
             max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
             is_streaming: false,
+            json_buffer: String::new(),
         };
 
         assert_eq!(

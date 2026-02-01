@@ -35,6 +35,14 @@ test-verbose:
 test-one TEST:
     cargo test {{TEST}} -- --nocapture
 
+# Run integration tests (requires Claude CLI installed)
+test-integration:
+    cargo test -- --ignored --nocapture
+
+# Run all tests including integration tests
+test-all:
+    cargo test -- --include-ignored
+
 # Generate code coverage report (requires cargo-tarpaulin)
 coverage:
     cargo tarpaulin --out Html --output-dir coverage
