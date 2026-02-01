@@ -1,0 +1,36 @@
+[package]
+name = "claude-agent-sdk"
+version = "0.1.0"
+edition = "2021"
+authors = ["Alex Afshar <contact@afsharalex.com>"]
+description = "Rust SDK for the Claude Code CLI"
+license = "MIT"
+repository = "https://github.com/anthropics/claude-agent-sdk-rust"
+keywords = ["claude", "anthropic", "ai", "sdk", "agent"]
+categories = ["api-bindings", "asynchronous"]
+
+[dependencies]
+tokio = { version = "1.35", features = ["full", "process", "sync", "time"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+async-trait = "0.1"
+futures = "0.3"
+tracing = "0.1"
+dirs = "5.0"
+pin-project-lite = "0.2"
+which = "7.0"
+async-stream = "0.3"
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.12"
+tempfile = "3.10"
+pretty_assertions = "1.4"
+
+[features]
+default = []
+
+[[example]]
+name = "quick_start"
+path = "examples/quick_start.rs"
