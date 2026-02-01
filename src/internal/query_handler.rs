@@ -75,6 +75,9 @@ impl QueryHandler {
     }
 
     /// Initialize control protocol if in streaming mode.
+    ///
+    /// This method sends an initialize request and reads messages directly from
+    /// the transport until it receives the control response.
     pub async fn initialize(&mut self) -> Result<Option<Value>> {
         if !self.is_streaming_mode {
             return Ok(None);
@@ -91,13 +94,74 @@ impl QueryHandler {
             },
         };
 
-        let response = self
-            .send_control_request(request, self.initialize_timeout_secs)
-            .await?;
+        // Generate request ID
+        let request_id = format!(
+            "req_{}_{}",
+            self.request_counter.fetch_add(1, Ordering::SeqCst),
+            rand_hex()
+        );
 
-        self.initialized = true;
-        self.initialization_result = Some(response.clone());
-        Ok(Some(response))
+        // Build and send the control request
+        let control_request = SDKControlRequest::new(request_id.clone(), request);
+        let json_str = serde_json::to_string(&control_request)?;
+        self.transport.write(&format!("{}\n", json_str)).await?;
+
+        // Read messages until we get the control response
+        let timeout = std::time::Duration::from_secs(self.initialize_timeout_secs);
+        let deadline = std::time::Instant::now() + timeout;
+
+        loop {
+            if std::time::Instant::now() > deadline {
+                return Err(ClaudeSDKError::Timeout(format!(
+                    "Initialize request timed out after {} seconds",
+                    self.initialize_timeout_secs
+                )));
+            }
+
+            // Read next message with remaining timeout
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let msg_result =
+                tokio::time::timeout(remaining, self.transport.read_next_message()).await;
+
+            match msg_result {
+                Ok(Ok(Some(data))) => {
+                    // Check if this is a control response
+                    if let Some("control_response") = data.get("type").and_then(|v| v.as_str()) {
+                        if let Ok(response) = serde_json::from_value::<SDKControlResponse>(data) {
+                            if response.request_id() == request_id {
+                                match response.response {
+                                    ControlResponseVariant::Success { response, .. } => {
+                                        let result = response.unwrap_or(Value::Null);
+                                        self.initialized = true;
+                                        self.initialization_result = Some(result.clone());
+                                        return Ok(Some(result));
+                                    }
+                                    ControlResponseVariant::Error { error, .. } => {
+                                        return Err(ClaudeSDKError::ControlProtocol(error));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Not a control response for our request - continue reading
+                    // (During init, there shouldn't be other messages, but handle gracefully)
+                }
+                Ok(Ok(None)) => {
+                    // Stream ended
+                    return Err(ClaudeSDKError::ControlProtocol(
+                        "Transport stream ended before initialize response received".to_string(),
+                    ));
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    // Timeout
+                    return Err(ClaudeSDKError::Timeout(format!(
+                        "Initialize request timed out after {} seconds",
+                        self.initialize_timeout_secs
+                    )));
+                }
+            }
+        }
     }
 
     /// Build hooks configuration for initialization.
@@ -624,6 +688,15 @@ mod tests {
                     yield msg;
                 }
             })
+        }
+
+        async fn read_next_message(&mut self) -> Result<Option<Value>> {
+            let mut guard = self.messages.lock().await;
+            if guard.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(guard.remove(0)))
+            }
         }
 
         async fn close(&mut self) -> Result<()> {

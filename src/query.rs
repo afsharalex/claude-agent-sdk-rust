@@ -188,6 +188,15 @@ mod tests {
             })
         }
 
+        async fn read_next_message(&mut self) -> Result<Option<serde_json::Value>> {
+            let mut guard = self.messages.lock().await;
+            if guard.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(guard.remove(0)))
+            }
+        }
+
         async fn close(&mut self) -> Result<()> {
             self.connected.store(false, Ordering::SeqCst);
             Ok(())
